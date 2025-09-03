@@ -1,0 +1,21 @@
+Sure, here's the content for the file `/speech-ai-project/speech-ai-project/src/config/config.yaml`:
+
+model:
+  speech_to_text:
+    pretrained_model_path: "path/to/speech_to_text_model"
+    input_audio_format: "wav"
+    output_text_format: "txt"
+  
+  text_to_speech:
+    pretrained_model_path: "path/to/text_to_speech_model"
+    output_audio_format: "wav"
+
+data:
+  audio_directory: "src/data/audio"
+  transcripts_directory: "src/data/transcripts"
+
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  num_epochs: 50
+  validation_split: 0.2
