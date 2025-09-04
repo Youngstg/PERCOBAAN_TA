@@ -1,26 +1,264 @@
+import os
+import sys
+import yaml
+import argparse
+from pathlib import Path
+
+# Add the current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from models.speech_to_text import SpeechToTextModel
 from models.text_to_speech import TextToSpeechModel
-import os
+from utils.preprocessing import preprocess_audio
+from utils.evaluation import evaluate_model, print_evaluation_results
+
+def load_config(config_path='config/config.yaml'):
+    """
+    Load configuration from YAML file
+    Args:
+        config_path: Path to configuration file
+    Returns:
+        Configuration dictionary
+    """
+    try:
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+        return config
+    except FileNotFoundError:
+        print(f"Config file {config_path} not found. Using default settings.")
+        return get_default_config()
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return get_default_config()
+
+def get_default_config():
+    """
+    Get default configuration if config file is not available
+    Returns:
+        Default configuration dictionary
+    """
+    return {
+        'model': {
+            'speech_to_text': {
+                'pretrained_model_path': None,  # Will use default model
+                'input_audio_format': 'wav',
+                'output_text_format': 'txt'
+            },
+            'text_to_speech': {
+                'pretrained_model_path': None,  # Will use default model
+                'output_audio_format': 'wav'
+            }
+        },
+        'data': {
+            'audio_directory': 'data/audio',
+            'transcripts_directory': 'data/transcripts'
+        },
+        'training': {
+            'batch_size': 32,
+            'learning_rate': 0.001,
+            'num_epochs': 50,
+            'validation_split': 0.2
+        }
+    }
+
+def create_directories():
+    """Create necessary directories if they don't exist"""
+    directories = ['data/audio', 'data/transcripts', 'output']
+    for directory in directories:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+
+def demo_speech_to_text(stt_model, config):
+    """
+    Demo speech-to-text functionality
+    Args:
+        stt_model: Speech-to-text model instance
+        config: Configuration dictionary
+    """
+    print("\n=== Speech-to-Text Demo ===")
+    
+    audio_dir = config['data']['audio_directory']
+    
+    # Check if audio directory exists and has files
+    if os.path.exists(audio_dir):
+        audio_files = [f for f in os.listdir(audio_dir) if f.endswith(('.wav', '.mp3', '.flac', '.m4a'))]
+        
+        if audio_files:
+            for audio_file in audio_files[:3]:  # Process first 3 files
+                audio_path = os.path.join(audio_dir, audio_file)
+                print(f"\nProcessing: {audio_file}")
+                
+                try:
+                    # Transcribe audio
+                    transcription = stt_model.process_audio(audio_path)
+                    print(f"Transcription: {transcription}")
+                    
+                    # Save transcription
+                    transcript_path = os.path.join(
+                        config['data']['transcripts_directory'],
+                        f"{Path(audio_file).stem}.txt"
+                    )
+                    with open(transcript_path, 'w', encoding='utf-8') as f:
+                        f.write(transcription)
+                    print(f"Transcription saved to: {transcript_path}")
+                    
+                except Exception as e:
+                    print(f"Error processing {audio_file}: {e}")
+        else:
+            print(f"No audio files found in {audio_dir}")
+            print("Please add some audio files (.wav, .mp3, .flac, .m4a) to test STT functionality")
+    else:
+        print(f"Audio directory {audio_dir} not found")
+
+def demo_text_to_speech(tts_model, config):
+    """
+    Demo text-to-speech functionality
+    Args:
+        tts_model: Text-to-speech model instance
+        config: Configuration dictionary
+    """
+    print("\n=== Text-to-Speech Demo ===")
+    
+    # Sample texts to convert
+    sample_texts = [
+        "Hello, this is a speech synthesis demonstration.",
+        "The quick brown fox jumps over the lazy dog.",
+        "Artificial intelligence is transforming the world."
+    ]
+    
+    for i, text in enumerate(sample_texts):
+        print(f"\nConverting text {i+1}: {text}")
+        
+        try:
+            output_path = f"output/tts_output_{i+1}.wav"
+            tts_model.convert_text_to_audio(text, output_path)
+            
+            if os.path.exists(output_path):
+                print(f"Audio generated successfully: {output_path}")
+            else:
+                print("Audio generation failed")
+                
+        except Exception as e:
+            print(f"Error generating audio for text {i+1}: {e}")
+
+def interactive_mode(stt_model, tts_model):
+    """
+    Interactive mode for testing both models
+    Args:
+        stt_model: Speech-to-text model instance
+        tts_model: Text-to-speech model instance
+    """
+    print("\n=== Interactive Mode ===")
+    print("Commands:")
+    print("  stt <audio_file_path> - Convert speech to text")
+    print("  tts <text> - Convert text to speech")
+    print("  quit - Exit interactive mode")
+    
+    while True:
+        try:
+            user_input = input("\n> ").strip()
+            
+            if user_input.lower() == 'quit':
+                break
+            
+            elif user_input.startswith('stt '):
+                audio_path = user_input[4:].strip()
+                if os.path.exists(audio_path):
+                    transcription = stt_model.process_audio(audio_path)
+                    print(f"Transcription: {transcription}")
+                else:
+                    print(f"Audio file not found: {audio_path}")
+            
+            elif user_input.startswith('tts '):
+                text = user_input[4:].strip()
+                if text:
+                    output_path = "output/interactive_tts.wav"
+                    tts_model.convert_text_to_audio(text, output_path)
+                    if os.path.exists(output_path):
+                        print(f"Audio saved to: {output_path}")
+                    else:
+                        print("Failed to generate audio")
+                else:
+                    print("Please provide text to convert")
+            
+            else:
+                print("Unknown command. Use 'stt <file>', 'tts <text>', or 'quit'")
+                
+        except KeyboardInterrupt:
+            print("\nExiting interactive mode...")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
 
 def main():
-    # Initialize models
-    stt_model = SpeechToTextModel()
-    tts_model = TextToSpeechModel()
-
-    # Load pre-trained models
-    stt_model.load_model('path/to/speech_to_text_model')
-    tts_model.load_model('path/to/text_to_speech_model')
-
-    # Example audio file path
-    audio_file_path = os.path.join('data', 'audio', 'example.wav')
-
-    # Process audio to text
-    text_output = stt_model.process_audio(audio_file_path)
-    print("Transcribed Text:", text_output)
-
-    # Convert text back to speech
-    tts_model.convert_text_to_audio(text_output, 'output_audio.wav')
-    print("Audio saved as output_audio.wav")
+    """Main function"""
+    parser = argparse.ArgumentParser(description='Speech AI Project')
+    parser.add_argument('--config', default='config/config.yaml', help='Path to config file')
+    parser.add_argument('--mode', choices=['demo', 'interactive', 'stt', 'tts'], 
+                       default='demo', help='Run mode')
+    parser.add_argument('--audio', help='Audio file for STT')
+    parser.add_argument('--text', help='Text for TTS')
+    parser.add_argument('--output', default='output/generated.wav', help='Output file for TTS')
+    
+    args = parser.parse_args()
+    
+    print("=== Speech AI Project ===")
+    print("Initializing models...")
+    
+    # Create necessary directories
+    create_directories()
+    
+    # Load configuration
+    config = load_config(args.config)
+    
+    try:
+        # Initialize models
+        stt_model_path = config['model']['speech_to_text']['pretrained_model_path']
+        tts_model_path = config['model']['text_to_speech']['pretrained_model_path']
+        
+        print("Loading Speech-to-Text model...")
+        stt_model = SpeechToTextModel(stt_model_path)
+        
+        print("Loading Text-to-Speech model...")
+        tts_model = TextToSpeechModel(tts_model_path)
+        
+        print("Models loaded successfully!")
+        
+        # Run based on selected mode
+        if args.mode == 'demo':
+            demo_speech_to_text(stt_model, config)
+            demo_text_to_speech(tts_model, config)
+        
+        elif args.mode == 'interactive':
+            interactive_mode(stt_model, tts_model)
+        
+        elif args.mode == 'stt':
+            if args.audio:
+                if os.path.exists(args.audio):
+                    transcription = stt_model.process_audio(args.audio)
+                    print(f"Transcription: {transcription}")
+                else:
+                    print(f"Audio file not found: {args.audio}")
+            else:
+                print("Please provide --audio parameter for STT mode")
+        
+        elif args.mode == 'tts':
+            if args.text:
+                tts_model.convert_text_to_audio(args.text, args.output)
+                if os.path.exists(args.output):
+                    print(f"Audio saved to: {args.output}")
+                else:
+                    print("Failed to generate audio")
+            else:
+                print("Please provide --text parameter for TTS mode")
+        
+        print("\nProcess completed successfully!")
+        
+    except Exception as e:
+        print(f"Error during execution: {e}")
+        return 1
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit_code = main()
+    sys.exit(exit_code)

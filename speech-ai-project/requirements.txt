@@ -1,8 +1,43 @@
-numpy
-pandas
-scikit-learn
-tensorflow
-torch
-librosa
-pydub
-PyYAML
+# Core dependencies
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+
+# Deep Learning frameworks
+tensorflow>=2.8.0
+torch>=1.11.0
+torchaudio>=0.11.0
+
+# Audio processing
+librosa>=0.9.0
+pydub>=0.25.0
+soundfile>=0.10.0
+scipy>=1.7.0
+
+# Configuration and utilities
+PyYAML>=6.0
+
+# Transformers for pre-trained models
+transformers>=4.15.0
+datasets>=1.18.0
+
+# Text-to-Speech additional dependencies
+pyttsx3>=2.90  # Fallback TTS engine (works on Windows)
+
+# Audio quality improvements
+resampy>=0.2.2
+
+# Development and testing
+pytest>=6.2.0
+pytest-cov>=3.0.0
+
+# Jupyter notebook support (optional)
+jupyter>=1.0.0
+matplotlib>=3.5.0
+
+# Progress bars
+tqdm>=4.62.0
+
+# Windows-specific audio dependencies (uncomment if needed)
+# pywin32>=227  # For Windows TTS support
+# comtypes>=1.1.10  # For Windows COM interfaces
