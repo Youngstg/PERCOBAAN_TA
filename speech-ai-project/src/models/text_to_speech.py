@@ -6,21 +6,34 @@ import warnings
 warnings.filterwarnings("ignore")
 
 class TextToSpeechModel:
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, device: str | None = None):
         """
         Initialize Text-to-Speech model
         Args:
             model_path: Path to pre-trained model (optional)
+            device: 'cuda', 'cpu', 'mps', or None for auto
         """
         self.model = None
         self.processor = None
         self.vocoder = None
         self.sample_rate = 16000
+        self.device = self._select_device(device)
         
         if model_path:
             self.load_model(model_path)
         else:
             self.load_default_model()
+
+    def _select_device(self, device: str | None) -> torch.device:
+        if isinstance(device, torch.device):
+            return device
+        if device is not None:
+            return torch.device(device)
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
 
     def load_default_model(self):
         """Load default pre-trained SpeechT5 model"""
@@ -32,8 +45,8 @@ class TextToSpeechModel:
             self.model = SpeechT5ForTextToSpeech.from_pretrained(model_name)
             self.vocoder = SpeechT5HifiGan.from_pretrained(vocoder_name)
             
-            self.model.eval()
-            self.vocoder.eval()
+            self.model.to(self.device).eval()
+            self.vocoder.to(self.device).eval()
             print("Default SpeechT5 model loaded successfully")
         except Exception as e:
             print(f"Error loading default model: {e}")
@@ -60,12 +73,21 @@ class TextToSpeechModel:
         try:
             if isinstance(model_path, str) and (model_path.endswith('.pt') or model_path.endswith('.pth')):
                 self.model = torch.load(model_path, map_location='cpu')
-                self.model.eval()
+                self.model.to(self.device).eval()
+                # Attempt to also load default processor and vocoder
+                if self.processor is None:
+                    self.processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+                if self.vocoder is None:
+                    self.vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(self.device).eval()
             else:
                 # Try loading as HuggingFace model
                 self.processor = SpeechT5Processor.from_pretrained(model_path)
                 self.model = SpeechT5ForTextToSpeech.from_pretrained(model_path)
-                self.model.eval()
+                # Always ensure a vocoder is available
+                if self.vocoder is None:
+                    self.vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+                self.model.to(self.device).eval()
+                self.vocoder.to(self.device).eval()
             print(f"Model loaded successfully from {model_path}")
         except Exception as e:
             print(f"Error loading model from {model_path}: {e}")
@@ -91,17 +113,28 @@ class TextToSpeechModel:
             
             # Generate speaker embeddings (using default)
             # In a real implementation, you might want to use specific speaker embeddings
-            speaker_embeddings = torch.zeros((1, 512))  # Default embedding
+            speaker_embeddings = torch.zeros((1, 512), device=self.device)  # Default embedding
             
             # Generate speech
             with torch.no_grad():
-                speech = self.model.generate_speech(
-                    inputs["input_ids"], 
-                    speaker_embeddings, 
-                    vocoder=self.vocoder
-                )
+                input_ids = inputs["input_ids"].to(self.device)
+                # Optional mixed precision on CUDA
+                use_amp = self.device.type == "cuda"
+                if use_amp:
+                    with torch.cuda.amp.autocast():
+                        speech = self.model.generate_speech(
+                            input_ids,
+                            speaker_embeddings,
+                            vocoder=self.vocoder
+                        )
+                else:
+                    speech = self.model.generate_speech(
+                        input_ids,
+                        speaker_embeddings,
+                        vocoder=self.vocoder
+                    )
             
-            return speech.cpu().numpy(), self.sample_rate
+            return speech.detach().cpu().numpy(), self.sample_rate
         except Exception as e:
             print(f"Error during text-to-speech conversion: {e}")
             return None, None
@@ -116,8 +149,14 @@ class TextToSpeechModel:
         """
         try:
             temp_file = "temp_tts_output.wav"
+            # Generate speech to a temporary file
             self.tts_engine.save_to_file(text, temp_file)
             self.tts_engine.runAndWait()
+            # Ensure engine queue is flushed to avoid stalling on next call
+            try:
+                self.tts_engine.stop()
+            except Exception:
+                pass
             
             # Load the generated audio
             import librosa
@@ -157,7 +196,7 @@ class TextToSpeechModel:
                 waveform_tensor = waveform_tensor.unsqueeze(0)
             
             # Save audio file
-            torchaudio.save(output_path, waveform_tensor, sample_rate)
+            torchaudio.save(output_path, waveform_tensor.detach().cpu(), sample_rate)
             print(f"Audio saved successfully to {output_path}")
             return True
         except Exception as e:
@@ -171,8 +210,42 @@ class TextToSpeechModel:
             text: Input text
             output_path: Output audio file path
         """
+        # Fast path: when using pyttsx3 fallback, save directly to target file
+        if hasattr(self, 'use_pyttsx3') and self.use_pyttsx3:
+            try:
+                self.tts_engine.save_to_file(text, output_path)
+                self.tts_engine.runAndWait()
+                # Ensure queue is cleared to prevent subsequent stalls
+                try:
+                    self.tts_engine.stop()
+                except Exception:
+                    pass
+                # Best-effort wait until the file is fully written (Windows file locking)
+                import os, time
+                last_size = -1
+                stable_count = 0
+                for _ in range(20):  # up to ~2s
+                    if os.path.exists(output_path):
+                        size = os.path.getsize(output_path)
+                        if size == last_size and size > 0:
+                            stable_count += 1
+                            if stable_count >= 2:
+                                break
+                        else:
+                            stable_count = 0
+                            last_size = size
+                    time.sleep(0.1)
+                print(f"Audio saved successfully to {output_path}")
+                return True
+            except Exception as e:
+                print(f"pyttsx3 direct save failed: {e}")
+                # Fallback to waveform path below
+
+        # Default path: generate waveform then save via torchaudio
         waveform, sample_rate = self.text_to_audio(text)
         if waveform is not None:
             self.save_audio(waveform, sample_rate, output_path)
+            return True
         else:
             print("Failed to generate audio from text")
+            return False
